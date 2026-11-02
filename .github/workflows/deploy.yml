@@ -1,0 +1,24 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    name: SSH Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Server via SSH
+        # Placeholder script, not active yet
+        run: |
+          echo "Placeholder SSH Deploy script"
+          echo "To activate this workflow, set up the SSH private key secrets and server IP"
+          # Example command structure:
+          # eval $(ssh-agent -s)
+          # echo "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '\r' | ssh-add -
+          # ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} \
+          # "cd /var/www/pmgis && git pull && cd backend && npm install && npx prisma migrate deploy && pm2 restart pmgis-backend"

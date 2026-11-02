@@ -1,0 +1,327 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  HR_ADMIN
+  FINANCE_MANAGER
+  PROJECT_MANAGER
+  HOD
+  REPORTING_MANAGER
+  EMPLOYEE
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// ─── Phase 1 Models ──────────────────────────────────────────────────────────
+
+model User {
+  id                 String     @id @default(cuid())
+  employeeId         String     @unique
+  name               String
+  email              String     @unique
+  mobile             String?
+  role               Role
+  passwordHash       String
+  status             UserStatus @default(ACTIVE)
+  reportingManagerId String?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  // Self-referential relation: each user can have a reporting manager
+  reportingManager   User?      @relation("EmployeeManager", fields: [reportingManagerId], references: [id])
+  subordinates       User[]     @relation("EmployeeManager")
+
+  // Audit log entries this user created
+  auditLogs          AuditLog[] @relation("AuditPerformedBy")
+
+  // Refresh tokens
+  refreshTokens      RefreshToken[]
+
+  // Phase 2 — RMS-Rent relations
+  roomsCreated       Room[]        @relation("RoomCreatedBy")
+  roomsApproved      Room[]        @relation("RoomApprovedBy")
+  paymentsRecorded   RentPayment[] @relation("PaymentRecordedBy")
+  closuresRequested  RoomClosure[] @relation("ClosureRequestedBy")
+  closuresReviewed   RoomClosure[] @relation("ClosureReviewedBy")
+
+  // Phase 3 — ReMS relations
+  advanceRequests       AdvanceRequest[]       @relation("AdvanceEmployee")
+  reimbursementRequests ReimbursementRequest[] @relation("ReimbursementEmployee")
+
+  // Notifications
+  notifications        Notification[]
+
+  // Tasks relations
+  tasksAssigned        Task[]        @relation("TaskAssignedBy")
+  tasksReceived        Task[]        @relation("TaskAssignedTo")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  entityType    String   // e.g. "User", "Room", "RentPayment"
+  entityId      String
+  action        String   // e.g. "CREATE", "UPDATE", "APPROVE", "REJECT"
+  performedById String
+  performedBy   User     @relation("AuditPerformedBy", fields: [performedById], references: [id])
+  oldValue      Json?
+  newValue      Json?
+  ipAddress     String?
+  createdAt     DateTime @default(now())
+}
+
+// ─── Phase 2 Enums ────────────────────────────────────────────────────────────
+
+enum RoomStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  PENDING_CLOSURE
+  CLOSED
+}
+
+enum ClosureStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ─── Phase 2 Models — RMS-Rent ────────────────────────────────────────────────
+
+model Broker {
+  id               String   @id @default(cuid())
+  name             String
+  mobile           String
+  brokerageCharges Decimal  @default(0) @db.Decimal(10, 2)
+  bankName         String?
+  accountNumber    String?
+  ifscCode         String?
+  createdAt        DateTime @default(now())
+
+  rooms            Room[]
+}
+
+model Owner {
+  id            String   @id @default(cuid())
+  name          String
+  mobile        String
+  aadhaar       String?  // Fake format: 0000-0000-0000
+  pan           String?  // Fake format: AAAAA0000A
+  bankName      String?
+  accountNumber String?
+  ifscCode      String?
+  createdAt     DateTime @default(now())
+
+  rooms         Room[]
+}
+
+model Room {
+  id                 String     @id @default(cuid())
+  roomNumber         String?    @unique // Generated on approval: PMGIS-YYYY-NNN
+  projectName        String
+  city               String
+  address            String
+  googleMapLocation  String?
+  facilities         String?
+  electricityIncluded Boolean   @default(false)
+  waterIncluded      Boolean    @default(false)
+  otherUtilities     String?
+  startDate          DateTime
+  monthlyRent        Decimal    @db.Decimal(10, 2)
+  deposit            Decimal    @default(0) @db.Decimal(10, 2)
+  occupancyCapacity  Int        @default(1)
+  remark             String?
+  status             RoomStatus @default(PENDING_APPROVAL)
+
+  // Agreement
+  agreementFileUrl   String?
+  agreementStartDate DateTime?
+  agreementEndDate   DateTime?
+  agreementRemark    String?
+
+  // Relations
+  brokerId           String?
+  broker             Broker?    @relation(fields: [brokerId], references: [id])
+  ownerId            String
+  owner              Owner      @relation(fields: [ownerId], references: [id])
+  createdById        String
+  createdBy          User       @relation("RoomCreatedBy", fields: [createdById], references: [id])
+  approvedById       String?
+  approvedBy         User?      @relation("RoomApprovedBy", fields: [approvedById], references: [id])
+
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  payments           RentPayment[]
+  closureRequests    RoomClosure[]
+}
+
+model RentPayment {
+  id            String   @id @default(cuid())
+  roomId        String
+  room          Room     @relation(fields: [roomId], references: [id])
+  paymentMonth  Int      // 1-12
+  paymentYear   Int
+  rentAmount    Decimal  @db.Decimal(10, 2)
+  advanceAmount Decimal  @default(0) @db.Decimal(10, 2)
+  paymentDate   DateTime
+  remark        String?
+  recordedById  String
+  recordedBy    User     @relation("PaymentRecordedBy", fields: [recordedById], references: [id])
+  createdAt     DateTime @default(now())
+
+  @@unique([roomId, paymentMonth, paymentYear])
+}
+
+model RoomClosure {
+  id            String        @id @default(cuid())
+  roomId        String
+  room          Room          @relation(fields: [roomId], references: [id])
+  closureDate   DateTime
+  reason        String
+  remark        String?
+  status        ClosureStatus @default(PENDING)
+  requestedById String
+  requestedBy   User          @relation("ClosureRequestedBy", fields: [requestedById], references: [id])
+  reviewedById  String?
+  reviewedBy    User?         @relation("ClosureReviewedBy", fields: [reviewedById], references: [id])
+  reviewRemark  String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+// ─── Phase 3 Enums ────────────────────────────────────────────────────────────
+
+enum RequestStatus {
+  DRAFT
+  PENDING_MANAGER
+  PENDING_FINANCE
+  PAID
+  REJECTED
+}
+
+enum BillType {
+  INVOICE
+  CASH_VOUCHER
+}
+
+// ─── Phase 3 Models — ReMS ───────────────────────────────────────────────────
+
+model AdvanceRequest {
+  id               String        @id @default(cuid())
+  referenceNumber  String        @unique // Generated: ADV/YYYY/NNNN
+  employeeId       String
+  employee         User          @relation("AdvanceEmployee", fields: [employeeId], references: [id])
+  projectName      String
+  purpose          String
+  amount           Decimal       @db.Decimal(10, 2)
+  expenseHead      String
+  expectedDate     DateTime
+  supportingDocUrl String?
+  status           RequestStatus @default(PENDING_MANAGER)
+  
+  managerRemark    String?
+  financeRemark    String?
+  paidAt           DateTime?
+  
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+}
+
+model ReimbursementRequest {
+  id                   String        @id @default(cuid())
+  referenceNumber      String        @unique // Generated: REIMB/YYYY/NNNN
+  employeeId           String
+  employee             User          @relation("ReimbursementEmployee", fields: [employeeId], references: [id])
+  projectName          String
+  travelActivityDetails String
+  totalAmount          Decimal       @db.Decimal(10, 2)
+  status               RequestStatus @default(PENDING_MANAGER)
+  
+  managerRemark        String?
+  financeRemark        String?
+  paidAt               DateTime?
+  
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  expenseEntries       ExpenseEntry[]
+}
+
+model ExpenseEntry {
+  id                     String               @id @default(cuid())
+  reimbursementRequestId String
+  reimbursementRequest   ReimbursementRequest @relation(fields: [reimbursementRequestId], references: [id])
+  
+  expenseHead            String
+  amount                 Decimal              @db.Decimal(10, 2)
+  expenseDate            DateTime
+  billType               BillType
+  documentUrl            String
+  tdsApplicable          Boolean              @default(false)
+  tdsFlag                Boolean              @default(false)
+  cashVoucherReason      String?              // Required if > 10,000
+
+  createdAt              DateTime             @default(now())
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+// ─── Task Management Models ──────────────────────────────────────────────────
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  BLOCKED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Task {
+  id            String       @id @default(cuid())
+  title         String
+  description   String?
+  status        TaskStatus   @default(PENDING)
+  priority      TaskPriority @default(MEDIUM)
+  dueDate       DateTime?
+  updateRemark  String?
+
+  // Relations
+  assignedToId  String
+  assignedTo    User         @relation("TaskAssignedTo", fields: [assignedToId], references: [id])
+  assignedById  String
+  assignedBy    User         @relation("TaskAssignedBy", fields: [assignedById], references: [id])
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
